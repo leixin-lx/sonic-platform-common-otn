@@ -1,4 +1,3 @@
-import time
 ##
 #   Copyright (c) 2021 Alibaba Group and Accelink Technologies
 #
@@ -14,6 +13,7 @@ import time
 #   permissions and limitations under the License.
 ##
 
+import time
 import importlib
 from thrift.transport import TSocket
 from thrift.transport import TTransport
@@ -29,7 +29,7 @@ class ThriftClient(object):
         self.transport = TTransport.TBufferedTransport(socket)
         bprotocol = TBinaryProtocol.TBinaryProtocol(self.transport)
 
-        periph_rpc = importlib.import_module("otn_pmon.device.periph_rpc")
+        periph_rpc = importlib.import_module("otn_pmon.thrift_api.periph_rpc")
         self.pltfm_mgr = periph_rpc.Client(bprotocol)
 
         self.transport.open()

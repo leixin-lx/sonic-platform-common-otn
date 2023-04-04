@@ -14,15 +14,19 @@
 ##
 
 from swsscommon import swsscommon
-from otn_pmon.device.ttypes import *
 
 EXPIRE_7_DAYS = 7 * 24 * 60 * 60 #unit s
 EXPIRE_1_DAYS = 1 * 24 * 60 * 60 #unit s
+HOST_DB = 0
+CONFIG_DB   = swsscommon.CONFIG_DB
+STATE_DB    = swsscommon.STATE_DB
+COUNTERS_DB = swsscommon.COUNTERS_DB
+HISTORY_DB  = swsscommon.HISTORY_DB
 
 def get_dbs(periph_name, db_types) :
     if not isinstance(db_types, list) or len(db_types) == 0 :
         return None
-    slot_id = 0
+    slot_id = HOST_DB
     multi_db = False
     elmts = periph_name.split("-")
     if len(elmts) > 2 and int(elmts[2]) <= 4 :
@@ -100,3 +104,9 @@ class Client():
         if not t :
             return
         return t.delete(kname)
+
+    def pub_sub(self) :
+        pubsub = swsscommon.PubSub(self.db)
+        if not pubsub :
+            return
+        return pubsub

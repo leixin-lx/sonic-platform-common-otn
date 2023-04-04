@@ -13,13 +13,36 @@
 #   permissions and limitations under the License.
 ##
 
-from sonic_py_common import logger
-from otn_pmon.device.ttypes import periph_type
+import json
+from threading import Timer
+from otn_pmon.thrift_api.ttypes import periph_type
 from otn_pmon.thrift_client import thrift_try
-from swsscommon import swsscommon
-from otn_pmon.base import Pm, Alarm, slot_status
+from otn_pmon.common import *
 import otn_pmon.db as db
-import otn_pmon.utils as utils
+from otn_pmon.alarm import Alarm
+from otn_pmon.pm import Pm, clearPmByName
+from sonic_py_common.device_info import get_path_to_platform_dir
+
+def get_dev_spec() :
+    platform_path = get_path_to_platform_dir()
+    # platform_path = "/usr/share/sonic/platform"
+    spec_path = f"{platform_path}/dev_spec.json"
+    with open(spec_path, 'r', encoding='utf8') as fp:
+        return json.load(fp) 
+
+def get_periph_number(type) :
+    spec = get_dev_spec()
+    type_name = periph_type._VALUES_TO_NAMES[type]
+    if type_name :
+        return spec["number"][type_name]
+    return 0
+
+def get_periph_expected_pn(type) :
+    spec = get_dev_spec()
+    type_name = periph_type._VALUES_TO_NAMES[type]
+    if type_name :
+        return spec["expected-pn"][type_name]
+    return None
 
 class Periph(object):
     def __init__(self, type, id):
@@ -27,11 +50,8 @@ class Periph(object):
         self.id = id
         self.name = self.__get_name()
         self.table_name = periph_type._VALUES_TO_NAMES[type]
-        self.dbs = db.get_dbs(self.name, [swsscommon.CONFIG_DB, swsscommon.STATE_DB, swsscommon.COUNTERS_DB])
+        self.dbs = db.get_dbs(self.name, [db.CONFIG_DB, db.STATE_DB, db.COUNTERS_DB])
         self.state_initialized = False
-
-        self.log = logger.Logger(self.table_name, logger.Logger.LOG_FACILITY_DAEMON, (logger.Logger.LOG_OPTION_NDELAY | logger.Logger.LOG_OPTION_PID))
-        self.log.set_min_log_priority_info()
 
     def __get_name(self) :
         type_string = periph_type._VALUES_TO_NAMES[self.type]
@@ -46,60 +66,103 @@ class Periph(object):
             if self.get_presence() :
                 # self.initialize()
                 self.synchronize_presence()
-                print("{} synchronize_presence done".format(self.name))
+                # print("{} synchronize_presence done".format(self.name))
             else :
                 self.synchronize_not_presence()
-                print("{} synchronize_not_presence done".format(self.name))
+                # print("{} synchronize_not_presence done".format(self.name))
         except Exception as e :
-            self.log.log_warning(f"Failed to synchronize {self.name} as error : {e}")
+            LOG.log_warning(f"Failed to synchronize {self.name} as error : {e}")
+            # raise e
 
     def synchronize_presence(self) :
         if not self.state_initialized :
-            print("{} initialize_state doing".format(self.name))
+            # clear all alarms before initializing
+            Alarm.clearBy(self.name)
+
             self.initialize_state()
             self.state_initialized = True
+            # start a timer to check whether booting successed or failed
+            if hasattr(self, 'boot_timeout_secs') :
+                self.start_boot_timer(self.boot_timeout_secs)
         else :
-            print("{} update_state doing".format(self.name))
+            # print("{} update_state doing".format(self.name))
             self.update_state()
+            self.update_alarm()
+            self.update_pm()
 
     def synchronize_not_presence(self):
         self.state_initialized = False
-        self.dbs[swsscommon.STATE_DB].delete_entry(self.table_name, self.name)
-        Alarm.clearAll(self.name)
+        self.dbs[db.STATE_DB].delete_entry(self.table_name, self.name)
+        clearPmByName(self.name)
  
         data = [
             ("empty", "true"),
-            ("slot-status", "Empty"),
+            ("slot-status", get_slot_status_name(slot_status.EMPTY)),
         ]
-        self.dbs[swsscommon.STATE_DB].set(self.table_name, self.name, data)
+        self.dbs[db.STATE_DB].set(self.table_name, self.name, data)
 
-        card_miss = Alarm(self.name, "CARD_MISS")
-        card_miss.create()
+        card_miss = Alarm(self.name, "CRD_MISS")
+        card_miss.createAndClearOthers()
 
     def update_state(self) :
-        state_db = self.dbs[swsscommon.STATE_DB]
-        if self.removable() :
-            while True :
-                # the slot-status is still INIT until the initialization completed.
-                rss = self.get_slot_status()
-                if rss != slot_status.INIT :
-                    print(f"real-slot-status {slot_status._VALUES_TO_NAMES[rss]}")
-                    oper_status = utils.slot_status_to_oper_status(rss)
-                    state_db.set_field(self.table_name, self.name, "oper-status", oper_status)
-                    # initializing completed with slot-status changed
-                    break
+        # check unknown and mismatch
+        if self.unknown() :
+            self.update_slot_status(slot_status.UNKNOWN)
+            return
+        if self.mismatch() :
+            self.update_slot_status(slot_status.MISMATCH)
+            return
+
+        # only the slot-status of the linecard is updated by southbound api
+        if self.type == periph_type.LINECARD :
+            # do nothing if the linecard is still initializing.
+            if self.get_slot_status() == slot_status.INIT :
+                return
         else :
-            oper_status = utils.slot_status_to_oper_status(slot_status.READY)
-            state_db.set_field(self.table_name, self.name, "oper-status", oper_status)
+            self.update_slot_status(slot_status.READY)
 
     def update_pm(self, pm_name, value):
-        pm15 = Pm(self.table_name, self.name, pm_name, "15")
-        pm24 = Pm(self.table_name, self.name, pm_name, "24")
+        pm15 = Pm(self.table_name, self.name, pm_name, Pm.PM_TYPE_15)
+        pm24 = Pm(self.table_name, self.name, pm_name, Pm.PM_TYPE_24)
         pm15.update(value)
         pm24.update(value)
 
+    def mismatch(self) :
+        return False
+
+    def unknown(self) :
+        return False
+
     def update_alarm(self):
         pass
+
+    def start_boot_timer(self, timeout) :
+        def handler(self) :
+            s_status = self.get_slot_status()
+            # slot_status changed as boot finished with timeout
+            if slot_status.INIT == s_status :
+                self.update_slot_status(slot_status.BOOTFAIL)
+                boot_fail = Alarm(self.name, 'CRD_BOOT_FAIL')
+                boot_fail.createAndClearOthers()
+            LOG.log_info(f"{self.name} boot finished with {get_slot_status_name(s_status)}")
+
+        boot_timer = Timer(timeout, handler, (self, ))
+        boot_timer.start()
+        LOG.log_info(f"{self.name} boot timer with timeout({timeout}s) started")
+
+    def update_slot_status(self, status) :
+        if not self.removable() :
+            return
+        state_db = self.dbs[db.STATE_DB]
+         # compare with the slot-status in db
+        _, db_s_status = state_db.get_field(self.table_name, self.name, "slot-status")
+        if db_s_status and status != get_slot_status_value(db_s_status.upper()) :
+            state_db.set_field(self.table_name, self.name, "slot-status", get_slot_status_name(status))
+
+        # oper-status need to update with the updation of slot-status
+        _, db_o_status = state_db.get_field(self.table_name, self.name, "oper-status")
+        if db_o_status and db_o_status != slot_status_to_oper_status(status) :
+            state_db.set_field(self.table_name, self.name, "oper-status", slot_status_to_oper_status(status))
     
     def removable(self) :
         if self.type in (periph_type.LINECARD, periph_type.FAN, periph_type.PSU) :
@@ -124,13 +187,18 @@ class Periph(object):
     def get_temperature(self):
         def inner(client):
             return client.get_periph_temperature(self.type, self.id)
-        return thrift_try(inner) / 100
+        
+        temp = thrift_try(inner)
+        if temp != INVALID_TEMPERATURE :
+            temp = temp / 100
+        
+        return temp
 
     def get_slot_status(self):
-        state_db = self.dbs[swsscommon.STATE_DB]
+        state_db = self.dbs[db.STATE_DB]
         ok, status = state_db.get_field(self.table_name, self.name, "slot-status")
-        if ok and status in slot_status._NAMES_TO_VALUES :
-            return slot_status._NAMES_TO_VALUES[status.upper()]
+        if ok and  status in slot_status._NAMES_TO_VALUES :
+            return get_slot_status_value(status.upper())
 
         return None
 

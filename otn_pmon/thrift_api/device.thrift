@@ -72,6 +72,11 @@ enum power_ctl_type {
     ON
 }
 
+enum fan_control_mode {
+    AUTO,
+    MANUAL
+}
+
 struct system_version {
 1:  string fpgaup
 2:  string fpgadown
@@ -82,18 +87,18 @@ struct system_version {
 }
 
 struct psu_info {
-1:  i32 abs;
-2:  i32 ambient_temp;
-3:  i32 primary_temp;
-4:  i32 secondary_temp;
-5:  i32 vout;
-6:  i32 vin;
-7:  i32 iout;
-8:  i32 iin;
-9:  i32 pout;
-10: i32 pin;
-11: i32 fan;
-12: i32 capacity;
+1:  i32 abs;                # absorbed power
+2:  i32 ambient_temp;       # ambient temperature sensors
+3:  i32 primary_temp;       # primary temperature sensors
+4:  i32 secondary_temp;     # secondary temperature sensors
+5:  i32 vout;               # voltage output
+6:  i32 vin;                # voltage input
+7:  i32 iout;               # current output
+8:  i32 iin;                # current input
+9:  i32 pout;               # power output
+10: i32 pin;                # power input
+11: i32 fan;                # fan speed
+12: i32 capacity;           # power capacity
 }
 
 struct periph_eeprom {
@@ -113,19 +118,14 @@ struct fan_speed {
 2: i32 behind;
 }
 
-struct power_monitor {
-1:  i32 vol1;
-2:  i32 vol2;
-3:  i32 vol3;
-4:  i32 vol4;
-5:  i32 vol5;
-6:  i32 vol6;
-7:  i32 vol7;
-8:  i32 vol8;
-9:  i32 vol9;
-10: i32 vol10;
-11: i32 vol11;
-12: i32 vol12
+struct fan_speed_spec {
+1: i32 max;
+2: i32 min;
+}
+
+struct psu_vin_spec {
+1: i32 max;
+2: i32 min;
 }
 
 service periph_rpc {
@@ -140,9 +140,9 @@ service periph_rpc {
 
     periph_eeprom get_periph_eeprom(1: periph_type type, 2: i8 id);
 
-    ret_code initialize(1: periph_type type, 2: i8 id);
-
     psu_info get_psu_info(1: i8 id);
+
+    psu_vin_spec get_psu_vin_spec(1: i8 id);
 
     ret_code set_led_flash(1: led_type type, 2: i8 id, 4: led_flash_type flash_type);
 
@@ -162,20 +162,13 @@ service periph_rpc {
 
     fan_speed get_fan_speed(1: i8 id);
 
-    ret_code set_fan_speed(1: i8 id, 2: i32 speed);
+    fan_speed_spec get_fan_speed_spec(1: i8 id);
 
-    ret_code sync_time_to_power_control();
+    ret_code set_fan_control_mode(1: i8 id, 2: fan_control_mode mode);
+
+    ret_code set_fan_speed_rate(1: i8 id, 2: i32 speed_rate);
 
     string get_fpga_version(1: fpga_type ftype)
-
-    // debug APIs
-    i32 get_slot_power_monitor_points_number(1: i8 id);
-
-    i32 get_slot_power_monitor_point_log(1: i8 id, 2: i32 total, 3: i32 index);
-
-    power_monitor get_fpga_up_power_monitor();
-
-    power_monitor get_slot_power_monitor(1: i8 id);
 }
 
 

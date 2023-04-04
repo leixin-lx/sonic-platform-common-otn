@@ -14,12 +14,26 @@
 ##
 
 import psutil
-from otn_pmon.base import Alarm, slot_status
+from otn_pmon.common import *
+from otn_pmon.alarm import Alarm
 import otn_pmon.periph as periph
-import otn_pmon.utils as utils
+import otn_pmon.db as db
 from functools import lru_cache
-from otn_pmon.device.ttypes import led_color, periph_type
-from swsscommon import swsscommon
+from otn_pmon.thrift_api.ttypes import led_color, periph_type
+
+def get_chassis_power_capacity() :
+    pc = 0
+    chassis_pn = periph.get_periph_expected_pn(periph_type.CHASSIS)
+    if chassis_pn and len(chassis_pn) >= 4 :
+        power_type = chassis_pn[3]
+        if power_type == "0" :
+            pc = 550
+        elif power_type == "1" :
+            pc = 800
+        elif power_type == "2" :
+            pc = 1300
+    return pc
+
 
 @lru_cache()
 class Chassis(periph.Periph):
@@ -33,7 +47,6 @@ class Chassis(periph.Periph):
         super().__init__(periph_type.CHASSIS, id)
     
     def initialize_state(self):
-        Alarm.clearAll(self.name)
         eeprom = self.get_periph_eeprom()
         data = [
             ("part-no", eeprom.pn),
@@ -45,10 +58,10 @@ class Chassis(periph.Periph):
             ("empty", "false"),
             ("removable", "false"),
             ("mfg-name", "alibaba"),
-            ("oper-status", utils.slot_status_to_oper_status(slot_status.INIT)),
+            ("oper-status", periph.slot_status_to_oper_status(slot_status.INIT)),
         ]
 
-        self.dbs[swsscommon.STATE_DB].set(self.table_name, self.name, data)
+        self.dbs[db.STATE_DB].set(self.table_name, self.name, data)
 
     def update_pm(self) :
         temp = self.get_temperature()
@@ -58,25 +71,25 @@ class Chassis(periph.Periph):
         return psutil.disk_usage("/").percent
 
     def update_alarm(self) :
-        disk_full = Alarm(self.name, "DISK_FULL")
+        alarm = Alarm(self.name, "DISK_FULL")
         disk_usage = self.__get_disk_usage()
         if disk_usage >= Chassis.DISK_USAGE_THRESH :
-            disk_full.create()
+            alarm.create()
         else :
-            disk_full.clear()
+            alarm.clear()
 
-        temp_hi_alm = Alarm(self.name, "CHASSIS_TEMP_HIALM")
-        temp_hi_wrn = Alarm(self.name, "CHASSIS_TEMP_HIWAR")
-        temp_lo_alm = Alarm(self.name, "CHASSIS_TEMP_LOALM")
-        temp_lo_wrn = Alarm(self.name, "CHASSIS_TEMP_LOWAR")
+        alarm = None
         temp = self.get_temperature()
         if temp > Chassis.TEMP_HIGH_ALARM_THRESH :
-            temp_hi_alm.createAndClear("CHASSIS_TEMP")
+            alarm = Alarm(self.name, "CHASSIS_TEMP_HIALM")
         elif Chassis.TEMP_HIGH_WARN_THRESH <= temp <= Chassis.TEMP_HIGH_ALARM_THRESH :
-            temp_hi_wrn.createAndClear("CHASSIS_TEMP")
+            alarm = Alarm(self.name, "CHASSIS_TEMP_HIWAR")
         elif Chassis.TEMP_LOW_ALARM_THRESH <= temp <= Chassis.TEMP_LOW_WARN_THRESH :
-            temp_lo_wrn.createAndClear("CHASSIS_TEMP")
+            alarm = Alarm(self.name, "CHASSIS_TEMP_LOWAR")
         elif temp < Chassis.TEMP_LOW_ALARM_THRESH :
-            temp_lo_alm.createAndClear("CHASSIS_TEMP")
+            alarm = Alarm(self.name, "CHASSIS_TEMP_LOALM")
+
+        if alarm :
+            alarm.createAndClearOthers("CHASSIS_TEMP")
         else :
-            Alarm.clearAll(self.name)
+            Alarm.clearBy(self.name, "CHASSIS_TEMP")

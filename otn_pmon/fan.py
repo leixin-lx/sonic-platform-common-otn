@@ -13,25 +13,27 @@
 #   permissions and limitations under the License.
 ##
 
-from otn_pmon.base import Alarm, slot_status
+from otn_pmon.common import *
+from otn_pmon.alarm import Alarm
 import otn_pmon.periph as periph
-import otn_pmon.utils as utils
+import otn_pmon.db as db
 from functools import lru_cache
-from otn_pmon.device.ttypes import led_color, periph_type
+from otn_pmon.thrift_api.ttypes import led_color, periph_type
 from otn_pmon.thrift_client import thrift_try
-from swsscommon import swsscommon
 
 @lru_cache()
 class Fan(periph.Periph) :
-    SPEED_MAX = 31000
-    SPEED_MIN = 6000
-
-    def __init__(self, id):
+    def __init__(self, id) :
         super().__init__(periph_type.FAN, id)
+        self.boot_timeout_secs = 10
 
-    def initialize_state(self):
-        Alarm.clearAll(self.name)
+    def initialize_state(self) :
         eeprom = self.get_periph_eeprom()
+
+        s_status = self.get_slot_status()
+        if not s_status or s_status == slot_status.EMPTY :
+            s_status = slot_status.INIT
+
         data = [
             ('part-no', eeprom.pn),
             ('serial-no', eeprom.sn),
@@ -41,18 +43,23 @@ class Fan(periph.Periph) :
             ("empty", "false"),
             ('removable', "true"),
             ("mfg-name", "alibaba"),
-            ("oper-status", utils.slot_status_to_oper_status(slot_status.INIT)),
-            ("slot-status", slot_status._VALUES_TO_NAMES[slot_status.INIT]),
+            ("oper-status", periph.slot_status_to_oper_status(s_status)),
+            ("slot-status", get_slot_status_name(s_status)),
         ]
 
-        self.dbs[swsscommon.STATE_DB].set(self.table_name, self.name, data)
+        self.dbs[db.STATE_DB].set(self.table_name, self.name, data)
 
-    def __get_speed(self):
-        def inner(client):
+    def __get_speed(self) :
+        def inner(client) :
             return client.get_fan_speed(self.id)
         return thrift_try(inner)
 
-    def update_pm(self):
+    def __get_speed_spec(self) :
+        def inner(client) :
+            return client.get_fan_speed_spec(self.id)
+        return thrift_try(inner)
+
+    def update_pm(self) :
         temp = self.get_temperature()
         super().update_pm("Temperature", temp)
 
@@ -60,22 +67,28 @@ class Fan(periph.Periph) :
         super().update_pm("Speed", speed.front)
         super().update_pm("Speed_2", speed.behind)
 
-        pass
-
-    def update_alarm(self):
-        speed_high = Alarm(self.name, "FAN_HIGH")
-        speed_low = Alarm(self.name, "FAN_LOW")
-        fan_fail = Alarm(self.name, "FAN_FAIL")
+    def update_alarm(self) :
+        alarm = None
+        s_status = None
 
         speed = self.__get_speed()
         max_speed = speed.front if speed.front >= speed.behind else speed.behind
         min_speed = speed.front if speed.front <= speed.behind else speed.behind
 
-        if max_speed > Fan.SPEED_MAX :
-            speed_high.createAndClear("FAN")
+        speed_spec = self.__get_speed_spec()
+        if max_speed > speed_spec.max :
+            alarm = Alarm(self.name, "FAN_HIGH")
         elif max_speed == 0 or min_speed == 0 :
-            fan_fail.createAndClear("FAN")
-        elif min_speed < Fan.SPEED_MIN :
-            speed_low.createAndClear("FAN")
+            alarm = Alarm(self.name, "FAN_FAIL")
+            s_status = slot_status.UNKNOWN
+        elif min_speed < speed_spec.min  :
+            alarm = Alarm(self.name, "FAN_LOW")
+        
+        if alarm :
+            alarm.createAndClearOthers()
+            if s_status :
+                self.update_slot_status(s_status)
         else :
-            Alarm.clearAll(self.name)
+            cur_status = self.get_slot_status()
+            if cur_status == slot_status.READY :
+                Alarm.clearBy(self.name, "FAN_")

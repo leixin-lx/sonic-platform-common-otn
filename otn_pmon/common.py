@@ -13,36 +13,54 @@
 #   permissions and limitations under the License.
 ##
 
-from otn_pmon.device.ttypes import power_ctl_type, periph_type
-from otn_pmon.thrift_client import thrift_try
+from sonic_py_common.logger import Logger
 
-def get_system_version():
-    def inner(client):
-        return client.get_system_version()
-    return thrift_try(inner)
+INVALID_TEMPERATURE = -99
+LOG = Logger("PERIPH", Logger.LOG_FACILITY_DAEMON, Logger.LOG_OPTION_NDELAY | Logger.LOG_OPTION_PID)
+LOG.set_min_log_priority_info()
 
-def get_product_name() :
-    name = ""
-    def inner(client):
-        return client.get_periph_eeprom(periph_type.CHASSIS, 1)
-    chassis_eeprom = thrift_try(inner)
-    if chassis_eeprom :
-        name = chassis_eeprom.model_name
-    return name
+class slot_status(object):
+    EMPTY = 0
+    INIT = 1
+    READY = 2
+    MISMATCH = 3
+    COMFAIL = 4
+    BOOTFAIL = 5
+    UNKNOWN = 6
 
-def set_power_control(slot_id, type) :
-    pass
+    _VALUES_TO_NAMES = {
+        0: "EMPTY",
+        1: "INIT",
+        2: "READY",
+        3: "MISMATCH",
+        4: "COMFAIL",
+        5: "BOOTFAIL",
+        6: "UNKNOWN",
+    }
 
-def get_inlet_temp() :
-    pass
+    _NAMES_TO_VALUES = {
+        "EMPTY": 0,
+        "INIT": 1,
+        "READY": 2,
+        "MISMATCH": 3,
+        "COMFAIL": 4,
+        "BOOTFAIL": 5,
+        "UNKNOWN": 6,
+    }
 
-def get_outlet_temp() :
-    pass
+def slot_status_to_oper_status(status) :
+    oper_status = None
+    if status == slot_status.READY :
+        oper_status = "ACTIVE"
+    elif status == slot_status.INIT or status == slot_status.COMFAIL :
+        oper_status = "INACTIVE"
+    else :
+        oper_status = "DISABLED"
+    
+    return oper_status
 
-def get_reboot_type() :
-    pass
+def get_slot_status_value(status_name) :
+    return slot_status._NAMES_TO_VALUES[status_name]
 
-def switch_slot_uart(slot_id) :
-    def inner(client):
-        return client.switch_slot_uart(slot_id)
-    return thrift_try(inner)
+def get_slot_status_name(status) :
+    return slot_status._VALUES_TO_NAMES[status]

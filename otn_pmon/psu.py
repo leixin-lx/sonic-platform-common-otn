@@ -13,34 +13,44 @@
 #   permissions and limitations under the License.
 ##
 
-import otn_pmon.utils as utils
-from otn_pmon.base import Alarm, slot_status
-import otn_pmon.periph as periph
 from functools import lru_cache
-from otn_pmon.device.ttypes import led_color, periph_type
+from otn_pmon.common import *
+from otn_pmon.alarm import Alarm
+import otn_pmon.periph as periph
+import otn_pmon.chassis as chassis
+import otn_pmon.db as db
+from otn_pmon.thrift_api.ttypes import led_color, periph_type
 from otn_pmon.thrift_client import thrift_try
-from swsscommon import swsscommon
 
 @lru_cache()
 class Psu(periph.Periph):
     def __init__(self, id):
         super().__init__(periph_type.PSU, id)
+        self.boot_timeout_secs = 10
 
     def __get_psu_info(self):
         def inner(client):
             return client.get_psu_info(self.id)
         return thrift_try(inner)
+
+    def __get_psu_vin_spec(self):
+        def inner(client):
+            return client.get_psu_vin_spec(self.id)
+        return thrift_try(inner)
     
     def __expected_psu(self, pn) :
-        expected_pn = utils.get_expected_pn(self.type)
+        expected_pn = periph.get_periph_expected_pn(self.type)
         if pn in expected_pn :
             return True
         return False
 
     def initialize_state(self):
-        Alarm.clearAll(self.name)
         eeprom = self.get_periph_eeprom()
         psu_info = self.__get_psu_info()
+
+        s_status = self.get_slot_status()
+        if not s_status or s_status == slot_status.EMPTY :
+            s_status = slot_status.INIT
 
         data = [
             ('part-no', eeprom.pn),
@@ -52,18 +62,12 @@ class Psu(periph.Periph):
             ("empty", "false"),
             ('removable', "true"),
             ("mfg-name", "alibaba"),
-            ("oper-status", utils.slot_status_to_oper_status(slot_status.INIT)),
-            ("slot-status", slot_status._VALUES_TO_NAMES[slot_status.INIT]),
-            ("ambient-temp",   str(psu_info.ambient_temp)),
-            ("primary-temp",   str(psu_info.primary_temp)),
-            ("secondary-temp", str(psu_info.secondary_temp)),
-            ("pin",        str(psu_info.pin)),
-            ("pout",       str(psu_info.pout)),
-            ("fan-speed",  str(psu_info.fan)),
+            ("oper-status", periph.slot_status_to_oper_status(s_status)),
+            ("slot-status", get_slot_status_name(s_status)),
             ("capacity",   str(psu_info.capacity)),
         ]
 
-        self.dbs[swsscommon.STATE_DB].set(self.table_name, self.name, data)
+        self.dbs[db.STATE_DB].set(self.table_name, self.name, data)
 
     def update_pm(self):
         temp = self.get_temperature()
@@ -76,24 +80,52 @@ class Psu(periph.Periph):
         super().update_pm("OutputCurrent", psu_info.iout)
         super().update_pm("OutputPower",   psu_info.pout)
         super().update_pm("OutputVoltage", psu_info.vout)
-        pass
+
+        super().update_pm("AmbientTemperature", psu_info.ambient_temp)
+        super().update_pm("PrimaryTemperature", psu_info.primary_temp)
+        super().update_pm("SecondaryTemperature", psu_info.secondary_temp)
+        super().update_pm("FanSpeed", psu_info.fan)
+
+    def mismatch(self) :
+        psu_info = self.__get_psu_info()
+        cpc = chassis.get_chassis_power_capacity()
+        if cpc != psu_info.capacity :
+            return True
+
+        return False
+
+    def unknown(self) :
+        eeprom = self.get_periph_eeprom()
+        # check unknown as the pn is expected or not
+        if eeprom.pn and not self.__expected_psu(eeprom.pn) :
+            return True
+ 
+        return False
+
+    def __proc_vin_alarm(self) :
+        alarm = None
+        psu_info = self.__get_psu_info()
+        vin_spec = self.__get_psu_vin_spec()
+
+        if psu_info.vin > vin_spec.max :
+            alarm = Alarm(self.name, "VOLTAGE_INPUT_HIGH")
+        elif psu_info.vin < vin_spec.min :
+            alarm = Alarm(self.name, "VOLTAGE_INPUT_LOW")
+
+        if alarm :
+            alarm.createAndClearOthers("VOLTAGE_INPUT")
+        else :
+            Alarm.clearBy(self.name, "VOLTAGE_INPUT")
 
     def update_alarm(self):
-        psu_unknown = Alarm(self.name, "CRD_UNKNOWN")
-        # psu_fail = Alarm(self.name, "PSU_FAIL")
-        psu_mismatch = Alarm(self.name, "PSU_MISMATCH")
-
-        state_db = self.dbs[swsscommon.STATE_DB]
-        eeprom = self.get_periph_eeprom()
-        if not self.__expected_psu(eeprom.pn) :
-            psu_unknown.createAndClear("PSU")
-            state_db.set_field(self.table_name, self.name, "oper-status", utils.slot_status_to_oper_status(slot_status.UNKNOWN))
-            state_db.set_field(self.table_name, self.name, "slot-status", slot_status._VALUES_TO_NAMES[slot_status.UNKNOWN])
-
-        psu_info = self.__get_psu_info()
-        cpc = utils.get_chassis_power_capacity()
-        if cpc != psu_info.capacity :
-            psu_mismatch.createAndClear("PSU")
-            psu_mismatch.clearByPattern("CRD_UNKNOWN")
-            state_db.set_field(self.table_name, self.name, "oper-status", utils.slot_status_to_oper_status(slot_status.MISMATCH))
-            state_db.set_field(self.table_name, self.name, "slot-status", slot_status._VALUES_TO_NAMES[slot_status.MISMATCH])
+        cur_status = self.get_slot_status()
+        if cur_status == slot_status.UNKNOWN :
+            alarm = Alarm(self.name, "CRD_UNKNOWN")
+            alarm.createAndClearOthers()
+        elif cur_status == slot_status.MISMATCH :
+            alarm = Alarm(self.name, "PSU_MISMATCH")
+            alarm.createAndClearOthers()
+        elif cur_status == slot_status.READY :
+            Alarm.clearBy(self.name, "CRD_UNKNOWN")
+            Alarm.clearBy(self.name, "PSU_MISMATCH")
+            self.__proc_vin_alarm()
