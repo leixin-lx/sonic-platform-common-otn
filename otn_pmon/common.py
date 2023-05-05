@@ -19,6 +19,20 @@ INVALID_TEMPERATURE = -99
 LOG = Logger("PERIPH", Logger.LOG_FACILITY_DAEMON, Logger.LOG_OPTION_NDELAY | Logger.LOG_OPTION_PID)
 LOG.set_min_log_priority_info()
 
+class fan_control_mode(object):
+    AUTO = 0
+    MANUAL = 1
+
+    _VALUES_TO_NAMES = {
+        0: "AUTO",
+        1: "MANUAL",
+    }
+
+    _NAMES_TO_VALUES = {
+        "AUTO": 0,
+        "MANUAL": 1,
+    }
+
 class slot_status(object):
     EMPTY = 0
     INIT = 1
@@ -29,23 +43,23 @@ class slot_status(object):
     UNKNOWN = 6
 
     _VALUES_TO_NAMES = {
-        0: "EMPTY",
-        1: "INIT",
-        2: "READY",
-        3: "MISMATCH",
-        4: "COMFAIL",
-        5: "BOOTFAIL",
-        6: "UNKNOWN",
+        0: "Empty",
+        1: "Init",
+        2: "Ready",
+        3: "Mismatch",
+        4: "Comfail",
+        5: "Bootfail",
+        6: "Unknown",
     }
 
     _NAMES_TO_VALUES = {
-        "EMPTY": 0,
-        "INIT": 1,
-        "READY": 2,
-        "MISMATCH": 3,
-        "COMFAIL": 4,
-        "BOOTFAIL": 5,
-        "UNKNOWN": 6,
+        "Empty": 0,
+        "Init": 1,
+        "Ready": 2,
+        "Mismatch": 3,
+        "Comfail": 4,
+        "Bootfail": 5,
+        "Unknown": 6,
     }
 
 def slot_status_to_oper_status(status) :

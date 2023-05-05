@@ -19,7 +19,7 @@ from otn_pmon.alarm import Alarm
 import otn_pmon.periph as periph
 import otn_pmon.chassis as chassis
 import otn_pmon.db as db
-from otn_pmon.thrift_api.ttypes import led_color, periph_type
+from otn_pmon.thrift_api.ttypes import error_code, led_color, periph_type
 from otn_pmon.thrift_client import thrift_try
 
 @lru_cache()
@@ -31,13 +31,23 @@ class Psu(periph.Periph):
     def __get_psu_info(self):
         def inner(client):
             return client.get_psu_info(self.id)
+
+        result = thrift_try(inner)
+        if result.ret != error_code.OK :
+            return None
+
+        return result.info
+
+    def __psu_vin_high(self) :
+        def inner(client):
+            return client.psu_vin_high(self.id)
         return thrift_try(inner)
 
-    def __get_psu_vin_spec(self):
+    def __psu_vin_low(self) :
         def inner(client):
-            return client.get_psu_vin_spec(self.id)
+            return client.psu_vin_low(self.id)
         return thrift_try(inner)
-    
+
     def __expected_psu(self, pn) :
         expected_pn = periph.get_periph_expected_pn(self.type)
         if pn in expected_pn :
@@ -45,19 +55,23 @@ class Psu(periph.Periph):
         return False
 
     def initialize_state(self):
-        eeprom = self.get_periph_eeprom()
+        inv = self.get_inventory()
+        if not inv :
+            return
+
         psu_info = self.__get_psu_info()
+        if not psu_info :
+            return
 
         s_status = self.get_slot_status()
         if not s_status or s_status == slot_status.EMPTY :
             s_status = slot_status.INIT
 
         data = [
-            ('part-no', eeprom.pn),
-            ('serial-no', eeprom.sn),
-            ('mfg-date', eeprom.mfg_date),
-            ('hardware-version', eeprom.hw_ver),
-            ("model_name", eeprom.model_name),
+            ('part-no', inv.pn),
+            ('serial-no', inv.sn),
+            ('mfg-date', inv.mfg_date),
+            ('hardware-version', inv.hw_ver),
             ("parent", "CHASSIS-1"),
             ("empty", "false"),
             ('removable', "true"),
@@ -74,6 +88,9 @@ class Psu(periph.Periph):
         super().update_pm("Temperature", temp)
 
         psu_info = self.__get_psu_info()
+        if not psu_info :
+            return
+
         super().update_pm("InputCurrent",  psu_info.iin)
         super().update_pm("InputVoltage",  psu_info.vin)
         super().update_pm("InputPower",    psu_info.pin)
@@ -88,6 +105,9 @@ class Psu(periph.Periph):
 
     def mismatch(self) :
         psu_info = self.__get_psu_info()
+        if not psu_info :
+            return False
+
         cpc = chassis.get_chassis_power_capacity()
         if cpc != psu_info.capacity :
             return True
@@ -95,27 +115,25 @@ class Psu(periph.Periph):
         return False
 
     def unknown(self) :
-        eeprom = self.get_periph_eeprom()
+        inv = self.get_inventory()
         # check unknown as the pn is expected or not
-        if eeprom.pn and not self.__expected_psu(eeprom.pn) :
+        if inv and inv.pn and not self.__expected_psu(inv.pn) :
             return True
  
         return False
 
     def __proc_vin_alarm(self) :
-        alarm = None
-        psu_info = self.__get_psu_info()
-        vin_spec = self.__get_psu_vin_spec()
-
-        if psu_info.vin > vin_spec.max :
-            alarm = Alarm(self.name, "VOLTAGE_INPUT_HIGH")
-        elif psu_info.vin < vin_spec.min :
-            alarm = Alarm(self.name, "VOLTAGE_INPUT_LOW")
-
-        if alarm :
-            alarm.createAndClearOthers("VOLTAGE_INPUT")
+        vin_h = Alarm(self.name, "VOLTAGE_INPUT_HIGH")
+        if self.__psu_vin_high() :
+            vin_h.create()
         else :
-            Alarm.clearBy(self.name, "VOLTAGE_INPUT")
+            vin_h.clear()
+
+        vin_l = Alarm(self.name, "VOLTAGE_INPUT_LOW")
+        if self.__psu_vin_low() :
+            vin_l.create()
+        else :
+            vin_l.clear()
 
     def update_alarm(self):
         cur_status = self.get_slot_status()

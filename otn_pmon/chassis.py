@@ -16,6 +16,7 @@
 import psutil
 from otn_pmon.common import *
 from otn_pmon.alarm import Alarm
+import otn_pmon.public as public
 import otn_pmon.periph as periph
 import otn_pmon.db as db
 from functools import lru_cache
@@ -47,13 +48,16 @@ class Chassis(periph.Periph):
         super().__init__(periph_type.CHASSIS, id)
     
     def initialize_state(self):
-        eeprom = self.get_periph_eeprom()
+        inv = self.get_inventory()
+        if not inv :
+            return
+
         data = [
-            ("part-no", eeprom.pn),
-            ("serial-no", eeprom.sn),
-            ("mfg-date", eeprom.mfg_date),
-            ("hardware-version", eeprom.hw_ver),
-            ("software-version", eeprom.sw_ver),
+            ("part-no", inv.pn),
+            ("serial-no", inv.sn),
+            ("mfg-date", inv.mfg_date),
+            ("hardware-version", inv.hw_ver),
+            ("software-version", inv.sw_ver),
             ("parent", "CHASSIS-1"),
             ("empty", "false"),
             ("removable", "false"),
@@ -62,6 +66,9 @@ class Chassis(periph.Periph):
         ]
 
         self.dbs[db.STATE_DB].set(self.table_name, self.name, data)
+
+    def get_temperature(self):
+        return public.get_inlet_temp()
 
     def update_pm(self) :
         temp = self.get_temperature()

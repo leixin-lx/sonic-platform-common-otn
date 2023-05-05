@@ -36,20 +36,21 @@ class Linecard(periph.Periph):
             ("parent", "CHASSIS-1"),
             ("empty", "false"),
             ("removable", "true"),
-            ("power-admin-state", "POWER_ENABLED"),
+            ("power-admin-state", "POWER_DISABLED"),
             ("mfg-name", "alibaba"),
             ("oper-status", periph.slot_status_to_oper_status(s_status)),
             ("slot-status", get_slot_status_name(s_status)),
         ]
 
         # initialize inventory info if linecard`s eeprom can be read by thrift
-        eeprom = self.get_periph_eeprom()
-        if eeprom.pn :
+        inv = self.get_inventory()
+        if inv :
             extend = [
-                ("part-no", eeprom.pn),
-                ("serial-no", eeprom.sn),
-                ("mfg-date", eeprom.mfg_date),
-                ("hardware-version", eeprom.hw_ver),
+                ("linecard-type", inv.type),
+                ("part-no", inv.pn),
+                ("serial-no", inv.sn),
+                ("mfg-date", inv.mfg_date),
+                ("hardware-version", inv.hw_ver),
             ]
             data.extend(extend)
 
@@ -101,4 +102,4 @@ class Linecard(periph.Periph):
             alarm = Alarm(self.name, "CRD_MISMATCH")
             alarm.createAndClearOthers()
         elif cur_status == slot_status.READY :
-            Alarm.clearBy(self.name, "PSU_MISMATCH")
+            Alarm.clearBy(self.name, "CRD_MISMATCH")

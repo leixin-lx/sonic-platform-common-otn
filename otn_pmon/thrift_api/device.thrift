@@ -16,6 +16,10 @@
 
 
 typedef i8 ret_code  // OK:0, ERROR:1~
+enum error_code {
+    OK,
+    ERROR
+}
 
 enum periph_type {
     CHASSIS,
@@ -33,21 +37,15 @@ enum led_type {
     UNKNOWN
 }
 
-enum fpga_type {
-    UP,
-    DOWN
+enum led_state {
+    OFF,
+    ON
 }
 
 enum led_color {
     RED,
     GREEN,
     YELLOW,
-    ORANGE,
-    NONE
-}
-
-enum led_flash_type {
-    RED_YELLOW_GREEN,
     NONE
 }
 
@@ -72,37 +70,43 @@ enum power_ctl_type {
     ON
 }
 
-enum fan_control_mode {
-    AUTO,
-    MANUAL
+struct system_version {
+1:  string fpga;            # eg: "1:v1.0;2:v1.1;3:v1.3"
+2:  string pcb;
+3:  string bom;
+4:  string devmgr;
+5:  string ucd90120;
+6: optional string reserve 
 }
 
-struct system_version {
-1:  string fpgaup
-2:  string fpgadown
-3:  string pcb;
-4:  string bom;
-5:  string devmgr;
-6:  string ucd90120;
+struct ret_temp {
+1:  ret_code ret;
+2:  i32 temperature;
 }
 
 struct psu_info {
-1:  i32 abs;                # absorbed power
-2:  i32 ambient_temp;       # ambient temperature sensors
-3:  i32 primary_temp;       # primary temperature sensors
-4:  i32 secondary_temp;     # secondary temperature sensors
-5:  i32 vout;               # voltage output
-6:  i32 vin;                # voltage input
-7:  i32 iout;               # current output
-8:  i32 iin;                # current input
-9:  i32 pout;               # power output
-10: i32 pin;                # power input
-11: i32 fan;                # fan speed
-12: i32 capacity;           # power capacity
+1:  i32 abs;                         # absorbed power
+2:  i32 ambient_temp;                # ambient temperature sensors
+3:  i32 primary_temp;                # primary temperature sensors
+4:  i32 secondary_temp;              # secondary temperature sensors
+5:  i32 vout;                        # voltage output
+6:  i32 vin;                         # voltage input
+7:  i32 iout;                        # current output
+8:  i32 iin;                         # current input
+9:  i32 pout;                        # power output
+10: i32 pin;                         # power input
+11: i32 fan;                         # fan speed
+12: i32 capacity;                    # power capacity
+13: optional string reserve          # reserve field
 }
 
-struct periph_eeprom {
-1: string type;
+struct ret_psu_info {
+1:  ret_code ret;
+2:  psu_info info;
+}
+
+struct inventory {
+1: optional string type;
 2: string model_name;
 3: string pn;
 4: string sn;
@@ -111,6 +115,12 @@ struct periph_eeprom {
 7: string sw_ver;
 8: string mfg_date;
 9: string mac_addr;
+10: optional string reserve 
+}
+
+struct ret_inventory {
+1:  ret_code ret;
+2:  inventory inv;
 }
 
 struct fan_speed {
@@ -118,12 +128,12 @@ struct fan_speed {
 2: i32 behind;
 }
 
-struct fan_speed_spec {
-1: i32 max;
-2: i32 min;
+struct ret_fan_speed {
+1:  ret_code ret;
+2:  fan_speed speed;
 }
 
-struct psu_vin_spec {
+struct fan_speed_spec {
 1: i32 max;
 2: i32 min;
 }
@@ -136,21 +146,23 @@ service periph_rpc {
 
     string get_periph_version(1: periph_type type, 2: i8 id);
 
-    i32 get_periph_temperature(1: periph_type type, 2: i8 id);
+    ret_temp get_periph_temperature(1: periph_type type, 2: i8 id);
 
-    periph_eeprom get_periph_eeprom(1: periph_type type, 2: i8 id);
+    ret_inventory get_inventory(1: periph_type type, 2: i8 id);
 
-    psu_info get_psu_info(1: i8 id);
+    ret_psu_info get_psu_info(1: i8 id);
 
-    psu_vin_spec get_psu_vin_spec(1: i8 id);
+    bool psu_vin_high(1: i8 id);
 
-    ret_code set_led_flash(1: led_type type, 2: i8 id, 4: led_flash_type flash_type);
+    bool psu_vin_low(1: i8 id);
+
+    ret_code set_led_state(1: led_type type, 2: i8 id, 3: led_state state);
 
     ret_code set_led_color(1: led_type type, 2: i8 id, 3: led_color color);
 
     reboot_type get_reboot_type();
 
-    ret_code periph_reboot(1: periph_type type, 2: i8 id, 3: reboot_type reboot_type);
+    ret_code periph_reboot(1: periph_type ptype, 2: i8 id, 3: reboot_type rtype);
 
     string get_power_control_version(1: i8 slot_id);
 
@@ -160,15 +172,13 @@ service periph_rpc {
 
     ret_code switch_slot_uart(1: i8 id);
 
-    fan_speed get_fan_speed(1: i8 id);
+    ret_fan_speed get_fan_speed(1: i8 id);
 
     fan_speed_spec get_fan_speed_spec(1: i8 id);
 
-    ret_code set_fan_control_mode(1: i8 id, 2: fan_control_mode mode);
-
     ret_code set_fan_speed_rate(1: i8 id, 2: i32 speed_rate);
 
-    string get_fpga_version(1: fpga_type ftype)
+    string get_fpga_version(1: i8 id);
 }
 
 

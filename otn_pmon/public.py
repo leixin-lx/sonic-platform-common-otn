@@ -13,11 +13,12 @@
 #   permissions and limitations under the License.
 ##
 
-from otn_pmon.thrift_api.ttypes import power_ctl_type, periph_type, fan_control_mode
+from otn_pmon.thrift_api.ttypes import error_code, power_ctl_type, periph_type
 from otn_pmon.thrift_client import thrift_try
 from otn_pmon.common import *
 import otn_pmon.periph as periph
 import otn_pmon.linecard as linecard
+import otn_pmon.fan as fan
 import otn_pmon.cu as cu
 
 def get_first_slot_id(type) :
@@ -50,27 +51,32 @@ def get_system_version():
 def get_product_name() :
     name = ""
     def inner(client):
-        return client.get_periph_eeprom(periph_type.CHASSIS, 1)
-    chassis_eeprom = thrift_try(inner)
-    if chassis_eeprom :
-        name = chassis_eeprom.model_name
-    return name
+        return client.get_inventory(periph_type.CHASSIS, 1)
+
+    result = thrift_try(inner)
+    if result.ret != error_code.OK :
+        return name
+
+    return result.inv.model_name
 
 def get_chassis_mac() :
     def inner(client):
-        return client.get_periph_eeprom(periph_type.CHASSIS, 1)
-    chassis_eeprom = thrift_try(inner)
-    if chassis_eeprom :
-        mac = chassis_eeprom.mac_addr
-    return mac
+        return client.get_inventory(periph_type.CHASSIS, 1)
+
+    result = thrift_try(inner)
+    if result.ret != error_code.OK :
+        return None
+
+    return result.inv.mac_addr
 
 def set_power_control(slot_id, type) :
     pass
 
 def get_inlet_temp() :
     card_temp = INVALID_TEMPERATURE
-    linecard_num = periph.get_periph_number(periph_type.LINECARD)
-    for i in range (1, linecard_num + 1) :
+    start = get_first_slot_id(periph_type.LINECARD)
+    end = get_last_slot_id(periph_type.LINECARD)
+    for i in range (start, end + 1) :
         card = linecard.Linecard(i)
         tmp = card.get_temperature()
         if tmp and tmp > card_temp :
@@ -84,7 +90,15 @@ def get_inlet_temp() :
     return c.get_temperature()
 
 def get_outlet_temp() :
-    pass
+    temp = INVALID_TEMPERATURE
+    start = get_first_slot_id(periph_type.FAN)
+    end = get_last_slot_id(periph_type.FAN)
+    for i in range (start, end + 1) :
+        f = fan.Fan(i)
+        tmp = f.get_temperature()
+        if tmp and tmp > temp :
+            temp = tmp
+    return temp
 
 def get_reboot_type() :
     def inner(client):
@@ -102,10 +116,10 @@ def periph_reboot(p_type, id, r_type) :
     return thrift_try(inner)
 
 def set_fan_speed(id, speed_rate) :
-    def inner(client):
-        client.set_fan_control_mode(id, fan_control_mode.AUTO)
-        if speed_rate.lower() != "auto" :
-            client.set_fan_control_mode(id, fan_control_mode.MANUAL)
+    f = fan.Fan(id)
+    if str(speed_rate) == "auto" :
+        f.control_mode = fan_control_mode.AUTO
+        return
 
-        return client.set_fan_speed_rate(id, speed_rate)
-    return thrift_try(inner)
+    f.control_mode = fan_control_mode.MANUAL
+    f.set_speed_rate(speed_rate)

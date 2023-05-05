@@ -15,7 +15,7 @@
 
 import json
 from threading import Timer
-from otn_pmon.thrift_api.ttypes import periph_type
+from otn_pmon.thrift_api.ttypes import periph_type, error_code
 from otn_pmon.thrift_client import thrift_try
 from otn_pmon.common import *
 import otn_pmon.db as db
@@ -63,7 +63,7 @@ class Periph(object):
 
     def synchronize(self) :
         try:
-            if self.get_presence() :
+            if self.presence() :
                 # self.initialize()
                 self.synchronize_presence()
                 # print("{} synchronize_presence done".format(self.name))
@@ -76,9 +76,6 @@ class Periph(object):
 
     def synchronize_presence(self) :
         if not self.state_initialized :
-            # clear all alarms before initializing
-            Alarm.clearBy(self.name)
-
             self.initialize_state()
             self.state_initialized = True
             # start a timer to check whether booting successed or failed
@@ -156,7 +153,7 @@ class Periph(object):
         state_db = self.dbs[db.STATE_DB]
          # compare with the slot-status in db
         _, db_s_status = state_db.get_field(self.table_name, self.name, "slot-status")
-        if db_s_status and status != get_slot_status_value(db_s_status.upper()) :
+        if db_s_status and status != get_slot_status_value(db_s_status) :
             state_db.set_field(self.table_name, self.name, "slot-status", get_slot_status_name(status))
 
         # oper-status need to update with the updation of slot-status
@@ -174,7 +171,7 @@ class Periph(object):
             return client.initialize(self.type, self.id)
         return thrift_try(inner)
       
-    def get_presence(self):
+    def presence(self):
         def inner(client):
             return client.periph_presence(self.type, self.id)
         return thrift_try(inner)
@@ -189,23 +186,28 @@ class Periph(object):
             return client.get_periph_temperature(self.type, self.id)
         
         temp = thrift_try(inner)
-        if temp != INVALID_TEMPERATURE :
-            temp = temp / 100
-        
-        return temp
+        if temp.ret != error_code.OK :
+            return INVALID_TEMPERATURE
+
+        return temp.temperature / 100
 
     def get_slot_status(self):
         state_db = self.dbs[db.STATE_DB]
         ok, status = state_db.get_field(self.table_name, self.name, "slot-status")
         if ok and  status in slot_status._NAMES_TO_VALUES :
-            return get_slot_status_value(status.upper())
+            return get_slot_status_value(status)
 
         return None
 
-    def get_periph_eeprom(self):
+    def get_inventory(self):
         def inner(client):
-            return client.get_periph_eeprom(self.type, self.id)
-        return thrift_try(inner)
+            return client.get_inventory(self.type, self.id)
+
+        result = thrift_try(inner)
+        if result.ret != error_code.OK :
+            return None
+
+        return result.inv
 
     def set_led_color(self, type, id, color):
         def inner(client):
